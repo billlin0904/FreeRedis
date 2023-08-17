@@ -1,4 +1,7 @@
-﻿using System;
+﻿using FreeRedis.Internal.ObjectPool;
+using Microsoft.Extensions.ObjectPool;
+using System;
+using System.Buffers;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -12,6 +15,7 @@ using System.Net.Sockets;
 using System.Numerics;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace FreeRedis
 {
@@ -93,35 +97,41 @@ namespace FreeRedis
             string ReadSimpleString()
             {
                 return ReadLine(null);
-
-                //byte[] ReadClob()
-                //{
-                //    MemoryStream ms = null;
-                //    try
-                //    {
-                //        ms = new MemoryStream();
-                //        ReadLine(ms);
-                //        return ms.ToArray();
-                //    }
-                //    finally
-                //    {
-                //        ms?.Close();
-                //        ms?.Dispose();
-                //    }
-                //}
             }
+
+            Task<string> ReadSimpleStringAsync()
+            {
+                return ReadLineAsync(null);
+            }
+
             long ReadNumber(char msgtype)
             {
                 var numstr = ReadLine(null);
                 if (long.TryParse(numstr, out var num)) return num;
                 throw new ProtocolViolationException($"Expecting fail Number '{msgtype}0', got '{msgtype}{numstr}'");
             }
+
+            async Task<long> ReadNumberAsync(char msgtype)
+            {
+                var numstr = await ReadLineAsync(null);
+                if (long.TryParse(numstr, out var num)) return num;
+                throw new ProtocolViolationException($"Expecting fail Number '{msgtype}0', got '{msgtype}{numstr}'");
+            }
+
             BigInteger ReadBigNumber(char msgtype)
             {
                 var numstr = ReadLine(null);
                 if (BigInteger.TryParse(numstr, NumberStyles.Any, null, out var num)) return num;
                 throw new ProtocolViolationException($"Expecting fail BigNumber '{msgtype}0', got '{msgtype}{numstr}'");
             }
+
+            async Task<BigInteger> ReadBigNumberAsync(char msgtype)
+            {
+                var numstr = await ReadLineAsync(null);
+                if (BigInteger.TryParse(numstr, NumberStyles.Any, null, out var num)) return num;
+                throw new ProtocolViolationException($"Expecting fail BigNumber '{msgtype}0', got '{msgtype}{numstr}'");
+            }
+
             double ReadDouble(char msgtype)
             {
                 var numstr = ReadLine(null);
@@ -133,9 +143,32 @@ namespace FreeRedis
                 if (double.TryParse(numstr, NumberStyles.Any, null, out var num)) return num;
                 throw new ProtocolViolationException($"Expecting fail Double '{msgtype}1.23', got '{msgtype}{numstr}'");
             }
+
+            async Task<double> ReadDoubleAsync(char msgtype)
+            {
+                var numstr = await ReadLineAsync(null);
+                switch (numstr)
+                {
+                    case "inf": return double.PositiveInfinity;
+                    case "-inf": return double.NegativeInfinity;
+                }
+                if (double.TryParse(numstr, NumberStyles.Any, null, out var num)) return num;
+                throw new ProtocolViolationException($"Expecting fail Double '{msgtype}1.23', got '{msgtype}{numstr}'");
+            }
             bool ReadBoolean(char msgtype)
             {
                 var boolstr = ReadLine(null);
+                switch (boolstr)
+                {
+                    case "t": return true;
+                    case "f": return false;
+                }
+                throw new ProtocolViolationException($"Expecting fail Boolean '{msgtype}t', got '{msgtype}{boolstr}'");
+            }
+
+            async Task<bool> ReadBooleanAsync(char msgtype)
+            {
+                var boolstr = await ReadLineAsync(null);
                 switch (boolstr)
                 {
                     case "t": return true;
@@ -292,39 +325,96 @@ namespace FreeRedis
             void Read(Stream outStream, int len, int bufferSize = 1024)
             {
                 if (len <= 0) return;
-                var buffer = new byte[Math.Min(bufferSize, len)];
-                var bufferLength = buffer.Length;
-                while (true)
-                {
-                    var readed = _stream.Read(buffer, 0, bufferLength);
-                    if (readed <= 0) throw new ProtocolViolationException($"Expecting fail Read surplus length: {len}");
-                    if (readed > 0) outStream.Write(buffer, 0, readed);
-                    len = len - readed;
-                    if (len <= 0) break;
-                    if (len < buffer.Length) bufferLength = len;
-                }
-            }
-            string ReadLine(Stream outStream)
-            {
-                var sb = outStream == null ? new StringBuilder() : null;
-                var buffer = new byte[1];
-                var should_break = false;
-                while (true)
-                {
-                    var readed = _stream.Read(buffer, 0, 1);
-                    if (readed <= 0) throw new ProtocolViolationException($"Expecting fail ReadLine end of stream");
-                    if (buffer[0] == 13)
-                        should_break = true;
-                    else if (buffer[0] == 10 && should_break)
-                        break;
-                    else
+                var bufferLength = Math.Min(bufferSize, len);
+                var buffer = ArrayPool<byte>.Shared.Rent(bufferLength);
+                try
+                {                    
+                    while (true)
                     {
-                        if (outStream == null) sb.Append((char)buffer[0]);
-                        else outStream.WriteByte(buffer[0]);
-                        should_break = false;
+                        var readed = _stream.Read(buffer, 0, bufferLength);
+                        if (readed <= 0) throw new ProtocolViolationException($"Expecting fail Read surplus length: {len}");
+                        if (readed > 0) outStream.Write(buffer, 0, readed);
+                        len = len - readed;
+                        if (len <= 0) break;
+                        if (len < buffer.Length) bufferLength = len;
                     }
                 }
-                return sb?.ToString();
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
+            }
+
+            private byte[] _newLineBuffer = new byte[1];
+            private readonly Microsoft.Extensions.ObjectPool.ObjectPool<StringBuilder> _stringBuilderPool 
+                = new DefaultObjectPoolProvider().CreateStringBuilderPool();
+
+            string ReadLine(Stream outStream)
+            {
+                var sb = outStream == null ? _stringBuilderPool.Get() : null;
+
+                try
+                {
+                    _newLineBuffer[0] = 0;
+                    var should_break = false;
+                    while (true)
+                    {
+                        var readed = _stream.Read(_newLineBuffer, 0, 1);
+                        if (readed <= 0) throw new ProtocolViolationException($"Expecting fail ReadLine end of stream");
+                        if (_newLineBuffer[0] == 13)
+                            should_break = true;
+                        else if (_newLineBuffer[0] == 10 && should_break)
+                            break;
+                        else
+                        {
+                            if (outStream == null) sb.Append((char)_newLineBuffer[0]);
+                            else outStream.WriteByte(_newLineBuffer[0]);
+                            should_break = false;
+                        }
+                    }
+                    return sb?.ToString();
+                }
+                finally
+                {
+                    if (outStream == null)
+                    {
+                        _stringBuilderPool.Return(sb);
+                    }
+                }
+            }            
+
+            async Task<string> ReadLineAsync(Stream outStream)
+            {
+                var sb = outStream == null ? _stringBuilderPool.Get() : null;
+                try
+                {
+                    _newLineBuffer[0] = 0;
+                    var should_break = false;
+                    var ns = (NetworkStream)_stream;
+                    while (true)
+                    {
+                        var readed = await ns.ReadAsync(_newLineBuffer, 0, 1);
+                        if (readed <= 0) throw new ProtocolViolationException($"Expecting fail ReadLine end of stream");
+                        if (_newLineBuffer[0] == 13)
+                            should_break = true;
+                        else if (_newLineBuffer[0] == 10 && should_break)
+                            break;
+                        else
+                        {
+                            if (outStream == null) sb.Append((char)_newLineBuffer[0]);
+                            else outStream.WriteByte(_newLineBuffer[0]);
+                            should_break = false;
+                        }
+                    }
+                    return sb?.ToString();
+                }
+                finally
+                {
+                    if (outStream == null)
+                    {
+                        _stringBuilderPool.Return(sb);
+                    }
+                }
             }
         }
 

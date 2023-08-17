@@ -27,7 +27,7 @@ namespace FreeRedis.Tests
 			// var r = new RedisClient(connectionString); //redis 6.0
 			r.Serialize = obj => JsonConvert.SerializeObject(obj);
 			r.Deserialize = (json, type) => JsonConvert.DeserializeObject(json, type);
-			r.Notice += (s, e) => Trace.WriteLine(e.Log);
+			//r.Notice += (s, e) => Trace.WriteLine(e.Log);
 			return r;
 		});
 		public static RedisClient cli => _cliLazy.Value;

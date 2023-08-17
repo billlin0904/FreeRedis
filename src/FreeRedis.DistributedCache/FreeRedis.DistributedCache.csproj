@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
-		<TargetFrameworks>netstandard2.0;net70;net60;net50;netcoreapp31;netcoreapp21</TargetFrameworks>
+		<TargetFrameworks>net60</TargetFrameworks>
 		<AssemblyName>FreeRedis.DistributedCache</AssemblyName>
 		<PackageId>FreeRedis.DistributedCache</PackageId>
 		<RootNamespace>FreeRedis.DistributedCache</RootNamespace>

@@ -49,6 +49,11 @@ namespace FreeRedis.Tests.RedisClientTests
         [Fact]
         public void HGetAll()
         {
+            while (true)
+            {
+                var result = cli.HGetAll("TestMSet_key");
+            }
+
             cli.Del("TestHGetAll");
             cli.HMSet("TestHGetAll", "string1", base.String, "bytes1", base.Bytes, "class1", base.Class, "class1array", new[] { base.Class, base.Class });
             Assert.Equal(4, cli.HGetAll("TestHGetAll").Count);

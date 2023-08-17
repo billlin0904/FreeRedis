@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using FreeRedis.Internal.Buffered;
 
 namespace FreeRedis.Internal
 {
@@ -104,7 +105,7 @@ namespace FreeRedis.Internal
 
         Socket _socket;
         public Socket Socket => _socket ?? throw new RedisClientException("Redis socket connection was not opened");
-        NetworkStream _stream;
+        BufferedNetworkStream _stream;
         public Stream Stream => _stream ?? throw new RedisClientException("Redis socket connection was not opened");
         public bool IsConnected => _socket?.Connected == true && _stream != null;
         public event EventHandler<EventArgs> Connected;
@@ -256,7 +257,7 @@ namespace FreeRedis.Internal
                 }
                 localSocket.EndConnect(asyncResult);
                 _socket = localSocket;
-                _stream = new NetworkStream(Socket, true);
+                _stream = new BufferedNetworkStream(Socket, true);
                 _socket.ReceiveTimeout = (int)ReceiveTimeout.TotalMilliseconds;
                 _socket.SendTimeout = (int)SendTimeout.TotalMilliseconds;
                 Connected?.Invoke(this, new EventArgs());

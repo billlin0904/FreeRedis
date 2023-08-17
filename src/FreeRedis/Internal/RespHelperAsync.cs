@@ -1,8 +1,10 @@
 ﻿#if isasync
+using FreeRedis.Internal.Buffered;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -24,8 +26,12 @@ namespace FreeRedis
                 }
             }
 
+            private byte[] _blobStringBuffer = new byte[1];
+
             async Task<object> ReadBlobStringAsync(char msgtype, Encoding encoding, Stream destination, int bufferSize)
             {
+                var ns = (NetworkStream)_stream;
+
                 var clob = await ReadClobAsync();
                 if (encoding == null) return clob;
                 if (clob == null) return null;
@@ -33,16 +39,16 @@ namespace FreeRedis
 
                 async Task<byte[]> ReadClobAsync()
                 {
-                    MemoryStream ms = null;
+                    MemoryStream ms = null;                    
                     try
                     {
                         if (destination == null) destination = ms = new MemoryStream();
-                        var lenstr = ReadLine(null);
+                        var lenstr = await ReadLineAsync(null);
                         if (int.TryParse(lenstr, out var len))
                         {
                             if (len < 0) return null;
                             if (len > 0) await ReadAsync(destination, len, bufferSize);
-                            ReadLine(null);
+                            await ReadLineAsync(null);
                             if (len == 0) return new byte[0];
                             return ms?.ToArray();
                         }
@@ -50,16 +56,18 @@ namespace FreeRedis
                         {
                             while (true)
                             {
-                                char c = (char)_stream.ReadByte();
+                                _blobStringBuffer[0] = (byte) ';';
+                                var readed = await ns.ReadAsync(_blobStringBuffer, 0, 1);
+                                var c = (char)_blobStringBuffer[0];
                                 if (c != ';') throw new ProtocolViolationException($"Expecting fail Streamed strings ';', got '{c}'");
-                                var clenstr = ReadLine(null);
+                                var clenstr = await ReadLineAsync(null);
                                 if (int.TryParse(clenstr, out var clen))
                                 {
                                     if (clen == 0) break;
                                     if (clen > 0)
                                     {
                                         await ReadAsync(destination, clen, bufferSize);
-                                        ReadLine(null);
+                                        await ReadLineAsync(null);
                                         continue;
                                     }
                                 }
@@ -79,7 +87,7 @@ namespace FreeRedis
 
             async Task<object[]> ReadArrayAsync(char msgtype, Encoding encoding)
             {
-                var lenstr = ReadLine(null);
+                var lenstr = await ReadLineAsync(null);
                 if (int.TryParse(lenstr, out var len))
                 {
                     if (len < 0) return null;
@@ -104,7 +112,7 @@ namespace FreeRedis
             }
             async Task<object[]> ReadMapAsync(char msgtype, Encoding encoding)
             {
-                var lenstr = ReadLine(null);
+                var lenstr = await ReadLineAsync(null);
                 if (int.TryParse(lenstr, out var len))
                 {
                     if (len < 0) return null;
@@ -132,40 +140,46 @@ namespace FreeRedis
                 throw new ProtocolViolationException($"Expecting fail Map '{msgtype}3', got '{msgtype}{lenstr}'");
             }
 
+            private byte[] _testByteBuffer = new byte[1];
+
             async public Task<RedisResult> ReadObjectAsync(Encoding encoding)
             {
+                var ns = (BufferedNetworkStream)_stream;
+
                 while (true)
                 {
-                    var b = _stream.ReadByte();
-                    var c = (char)b;
+                    _testByteBuffer[0] = 0;
+                    var readed = await ns.ReadAsync(_testByteBuffer, 0, 1);
+                    var c = (char)_testByteBuffer[0];
+                    var b = _testByteBuffer[0];
                     //debugger++;
                     //if (debugger > 10000 && debugger % 10 == 0) 
                     //    throw new ProtocolViolationException($"Expecting fail MessageType '{b},{string.Join(",", ReadAll())}'");
                     switch (c)
                     {
                         case '$': return new RedisResult(await ReadBlobStringAsync(c, encoding, null, 1024), false, RedisMessageType.BlobString);
-                        case '+': return new RedisResult(ReadSimpleString(), false, RedisMessageType.SimpleString);
+                        case '+': return new RedisResult(await ReadSimpleStringAsync(), false, RedisMessageType.SimpleString);
                         case '=': return new RedisResult(await ReadBlobStringAsync(c, encoding, null, 1024), false, RedisMessageType.VerbatimString);
                         case '-':
                             {
-                                var simpleError = ReadSimpleString();
+                                var simpleError = await ReadSimpleStringAsync();
                                 if (simpleError == "NOAUTH Authentication required.")
                                     throw new ProtocolViolationException(simpleError);
                                 return new RedisResult(simpleError, false, RedisMessageType.SimpleError);
                             }
                         case '!': return new RedisResult(await ReadBlobStringAsync(c, encoding, null, 1024), false, RedisMessageType.BlobError);
-                        case ':': return new RedisResult(ReadNumber(c), false, RedisMessageType.Number);
-                        case '(': return new RedisResult(ReadBigNumber(c), false, RedisMessageType.BigNumber);
-                        case '_': ReadLine(null); return new RedisResult(null, false, RedisMessageType.Null);
-                        case ',': return new RedisResult(ReadDouble(c), false, RedisMessageType.Double);
-                        case '#': return new RedisResult(ReadBoolean(c), false, RedisMessageType.Boolean);
+                        case ':': return new RedisResult(await ReadNumberAsync(c), false, RedisMessageType.Number);
+                        case '(': return new RedisResult(await ReadBigNumberAsync(c), false, RedisMessageType.BigNumber);
+                        case '_': await ReadLineAsync(null); return new RedisResult(null, false, RedisMessageType.Null);
+                        case ',': return new RedisResult(ReadDoubleAsync(c), false, RedisMessageType.Double);
+                        case '#': return new RedisResult(ReadBooleanAsync(c), false, RedisMessageType.Boolean);
 
                         case '*': return new RedisResult(await ReadArrayAsync(c, encoding), false, RedisMessageType.Array);
                         case '~': return new RedisResult(await ReadArrayAsync(c, encoding), false, RedisMessageType.Set);
                         case '>': return new RedisResult(await ReadArrayAsync(c, encoding), false, RedisMessageType.Push);
                         case '%': return new RedisResult(await ReadMapAsync(c, encoding), false, RedisMessageType.Map);
                         case '|': return new RedisResult(await ReadMapAsync(c, encoding), false, RedisMessageType.Attribute);
-                        case '.': ReadLine(null); return new RedisResult(null, true, RedisMessageType.SimpleString); //无类型
+                        case '.': await ReadLineAsync(null); return new RedisResult(null, true, RedisMessageType.SimpleString); //无类型
                         case ' ': continue;
                         default:
                             if (b == -1) return new RedisResult(null, true, RedisMessageType.Null);
