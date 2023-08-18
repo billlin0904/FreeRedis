@@ -1,8 +1,6 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net.Sockets;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace FreeRedis.Internal.Buffered
@@ -46,6 +44,22 @@ namespace FreeRedis.Internal.Buffered
                 return _buffer[_offset++];
             }
             return base.ReadByte();
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int size, CancellationToken cancellationToken)
+        {
+            if (_length == 0 && _buffered)
+            {
+                _offset = 0;
+                _length = await base.ReadAsync(_buffer, _offset, _buffer.Length, cancellationToken);
+                if (_length == 0)
+                    return 0;
+            }
+            if (_length == 0)
+            {                            
+                return await base.ReadAsync(buffer, offset, size, cancellationToken);
+            }
+            return CopyFromBuffer(buffer, offset, size);
         }
 
         public override int Read(byte[] buffer, int offset, int size)
