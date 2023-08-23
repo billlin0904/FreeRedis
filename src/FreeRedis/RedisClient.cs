@@ -293,11 +293,6 @@ namespace FreeRedis
         #endregion
     }
 
-    public class RedisClientException : Exception
-    {
-        public RedisClientException(string message) : base(message) { }
-    }
-
     /// <summary>
     /// redis version >=6.2: Added the GT and LT options.
     /// </summary>

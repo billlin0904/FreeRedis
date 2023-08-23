@@ -1,4 +1,5 @@
 ﻿using FreeRedis.Internal.ObjectPool;
+using FreeRedis.Internal.Memory;
 using Microsoft.Extensions.ObjectPool;
 using System;
 using System.Buffers;
@@ -16,6 +17,7 @@ using System.Numerics;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.IO;
 
 namespace FreeRedis
 {
@@ -282,7 +284,7 @@ namespace FreeRedis
                 var ns = _stream as NetworkStream;
                 if (ns != null)
                 {
-                    using (var ms = new MemoryStream())
+                    using (var ms = RecyclableMemory.GetStream())
                     {
                         try
                         {
@@ -302,7 +304,7 @@ namespace FreeRedis
                 var ss = _stream as SslStream;
                 if (ss != null)
                 {
-                    using (var ms = new MemoryStream())
+                    using (var ms = RecyclableMemory.GetStream())
                     {
                         try
                         {
@@ -326,7 +328,7 @@ namespace FreeRedis
             {
                 if (len <= 0) return;
                 var bufferLength = Math.Min(bufferSize, len);
-                var buffer = ArrayPool<byte>.Shared.Rent(bufferLength);
+                var buffer = RecyclableMemory.GetBuffer(bufferLength);
                 try
                 {                    
                     while (true)
@@ -341,17 +343,15 @@ namespace FreeRedis
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(buffer);
+                    RecyclableMemory.ReturnBuffer(buffer);
                 }
             }
 
             private byte[] _newLineBuffer = new byte[1];
-            private readonly Microsoft.Extensions.ObjectPool.ObjectPool<StringBuilder> _stringBuilderPool 
-                = new DefaultObjectPoolProvider().CreateStringBuilderPool();
 
             string ReadLine(Stream outStream)
             {
-                var sb = outStream == null ? _stringBuilderPool.Get() : null;
+                var sb = outStream == null ? RecyclableMemory.GetStringBuilder() : null;
 
                 try
                 {
@@ -378,14 +378,14 @@ namespace FreeRedis
                 {
                     if (outStream == null)
                     {
-                        _stringBuilderPool.Return(sb);
+                        RecyclableMemory.ReturnStringBuilder(sb);
                     }
                 }
             }            
 
             async Task<string> ReadLineAsync(Stream outStream)
             {
-                var sb = outStream == null ? _stringBuilderPool.Get() : null;
+                var sb = outStream == null ? RecyclableMemory.GetStringBuilder() : null;
                 try
                 {
                     _newLineBuffer[0] = 0;
@@ -412,7 +412,7 @@ namespace FreeRedis
                 {
                     if (outStream == null)
                     {
-                        _stringBuilderPool.Return(sb);
+                        RecyclableMemory.ReturnStringBuilder(sb);
                     }
                 }
             }
@@ -548,7 +548,7 @@ namespace FreeRedis
                 }
                 if (obj is IEnumerable ie)
                 {
-                    using (var ms = new MemoryStream())
+                    using (var ms = RecyclableMemory.GetStream())
                     {
                         var msWriter = new Resp3Writer(ms, _encoding, _protocol);
                         var idx = 0;
@@ -1094,7 +1094,8 @@ namespace FreeRedis
         }
         public TValue ThrowOrValue<TValue>(bool useDefaultValue = false)
         {
-            if (IsError) throw new RedisServerException(this.SimpleError);
+            if (IsError)
+                throw new RedisServerException(this.SimpleError);
             if (useDefaultValue == false)
             {
                 var newval = this.Value.ConvertTo<TValue>();

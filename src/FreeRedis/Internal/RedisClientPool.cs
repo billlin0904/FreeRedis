@@ -11,6 +11,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net.Sockets;
 using System.IO;
+using FreeRedis.Internal.Memory;
+using Microsoft.IO;
 
 namespace FreeRedis.Internal
 {
@@ -104,7 +106,7 @@ namespace FreeRedis.Internal
                 {
                     topOwner.LogCallCtrl(cmd, () => 1, true, false); // aop before
                 });
-                using (var ms = new MemoryStream()) {
+                using (var ms = RecyclableMemory.GetStream()) {
                     var writer = new RespHelper.Resp3Writer(ms, rds.Encoding, RedisProtocol.RESP2);
                     cmds.ForEach(cmd =>
                     {
@@ -114,8 +116,6 @@ namespace FreeRedis.Internal
 
                     ms.Position = 0;
                     ms.CopyTo(rds.Stream);
-                    ms.Close();
-                    ms.Dispose();
                 }
                 cmds.ForEach(cmd =>
                 {

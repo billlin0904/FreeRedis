@@ -1,4 +1,5 @@
 ﻿using FreeRedis.Internal;
+using FreeRedis.Internal.Memory;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -153,7 +154,7 @@ namespace FreeRedis
             static void EndPipe(IRedisSocket rds, IEnumerable<PipelineCommand> cmds)
             {
                 var err = new List<PipelineCommand>();
-                var ms = new MemoryStream();
+                var ms = RecyclableMemory.GetStream();
 
                 try
                 {

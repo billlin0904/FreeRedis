@@ -1,15 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 using FreeRedis.Internal.Buffered;
+using FreeRedis.Internal.Memory;
 
 namespace FreeRedis.Internal
 {
@@ -163,7 +162,7 @@ namespace FreeRedis.Internal
         {
             LastCommand = cmd;
             if (IsConnected == false) Connect();
-            using (var ms = new MemoryStream()) //Writing data directly to will be very slow
+            using (var ms = RecyclableMemory.GetStream()) //Writing data directly to will be very slow
             {
                 new RespHelper.Resp3Writer(ms, Encoding, Protocol).WriteCommand(cmd);
                 ms.Position = 0;
@@ -194,38 +193,38 @@ namespace FreeRedis.Internal
             }
         }
 #if isasync
-        async public Task WriteAsync(CommandPacket cmd)
+        public async Task WriteAsync(CommandPacket cmd)
         {
             LastCommand = cmd;
             if (IsConnected == false) Connect();
-            using (var ms = new MemoryStream()) //Writing data directly to will be very slow
+            using (var ms = RecyclableMemory.GetStream()) //Writing data directly to will be very slow
             {
                 new RespHelper.Resp3Writer(ms, Encoding, Protocol).WriteCommand(cmd);
                 ms.Position = 0;
-                await ms.CopyToAsync(Stream);
+                await ms.CopyToAsync(Stream).ConfigureAwait(false);
                 ms.Close();
             }
             WriteAfter(cmd);
         }
-        async public Task<RedisResult> ReadAsync(CommandPacket cmd)
+        public async Task<RedisResult> ReadAsync(CommandPacket cmd)
         {
             LastCommand = cmd;
             if (ClientReply == ClientReplyType.on)
             {
                 if (IsConnected == false) Connect();
-                var rt = await Reader.ReadObjectAsync(cmd?._flagReadbytes == true ? null : Encoding);
+                var rt = await Reader.ReadObjectAsync(cmd?._flagReadbytes == true ? null : Encoding).ConfigureAwait(false);
                 rt.Encoding = Encoding;
                 cmd?.OnDataTrigger(rt);
                 return rt;
             }
             return new RedisResult(null, true, RedisMessageType.SimpleString) { Encoding = Encoding };
         }
-        async public Task ReadChunkAsync(Stream destination, int bufferSize = 1024)
+        public async Task ReadChunkAsync(Stream destination, int bufferSize = 1024)
         {
             if (ClientReply == ClientReplyType.on)
             {
                 if (IsConnected == false) Connect();
-                await Reader.ReadBlobStringChunkAsync(destination, bufferSize);
+                await Reader.ReadBlobStringChunkAsync(destination, bufferSize).ConfigureAwait(false);
             }
         }
 #endif

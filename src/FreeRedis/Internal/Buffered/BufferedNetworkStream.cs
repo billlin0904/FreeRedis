@@ -2,12 +2,13 @@
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using FreeRedis.Internal.Memory;
 
 namespace FreeRedis.Internal.Buffered
 {
     internal class BufferedNetworkStream : BasicNetworkStream
     {
-        private static readonly int MAX_BUF_SIZE = 64 * 1024;
+        private static readonly int MAX_BUF_SIZE = 4 * 1024;
 
         public BufferedNetworkStream(Socket baseSocket) 
             : base(baseSocket) 
@@ -21,6 +22,7 @@ namespace FreeRedis.Internal.Buffered
 
         protected override void Dispose(bool disposing)
         {
+            RecyclableMemory.ReturnBuffer(_buffer);
             _buffer = null;
             base.Dispose(disposing);
         }
@@ -32,7 +34,7 @@ namespace FreeRedis.Internal.Buffered
             set => _buffered = value;
         }
 
-        private byte[] _buffer = new byte[MAX_BUF_SIZE];
+        private byte[] _buffer = RecyclableMemory.GetBuffer(MAX_BUF_SIZE);
         private int _offset = 0;
         private int _length = 0;
 
@@ -46,18 +48,28 @@ namespace FreeRedis.Internal.Buffered
             return base.ReadByte();
         }
 
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            base.Write(buffer, offset, count);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            return base.WriteAsync(buffer, offset, count, cancellationToken);
+        }
+
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int size, CancellationToken cancellationToken)
         {
             if (_length == 0 && _buffered)
             {
                 _offset = 0;
-                _length = await base.ReadAsync(_buffer, _offset, _buffer.Length, cancellationToken);
+                _length = await base.ReadAsync(_buffer, _offset, _buffer.Length, cancellationToken).ConfigureAwait(false);
                 if (_length == 0)
                     return 0;
             }
             if (_length == 0)
             {                            
-                return await base.ReadAsync(buffer, offset, size, cancellationToken);
+                return await base.ReadAsync(buffer, offset, size, cancellationToken).ConfigureAwait(false);
             }
             return CopyFromBuffer(buffer, offset, size);
         }
